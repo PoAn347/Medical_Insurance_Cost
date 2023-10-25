@@ -1,0 +1,532 @@
+---
+title: "Final Project"
+author: "Bert"
+date: '2022-04-14'
+output:
+  word_document: default
+  pdf_document: default
+  html_document: default
+---
+```{r}
+library(readr)
+library(corrplot)
+library(ggplot2)
+library(leaps)
+library(glmnet)
+library(tree)
+library(randomForest)
+library(gbm)
+library(reshape2) 
+```
+
+
+```{r}
+#import data
+med = read.csv("C:/Users/bert0/Documents/Bert-school/Columbia University/Spring 2022/PM/insurance.csv", header=TRUE)
+df = read.csv("C:/Users/bert0/Documents/Bert-school/Columbia University/Spring 2022/PM/insurance.csv", header=TRUE)
+```
+
+```{r}
+#check missing data
+which(is.na(med))
+```
+
+
+```{r}
+#change data structure
+med$sex <- as.factor(med$sex)
+med$smoker <- as.factor(med$smoker)
+med$region <- as.factor(med$region)
+
+levels(med$sex) <- c("female", "male")
+levels(med$smoker) <- c("No", "Yes")
+levels(med$region) <- c("northeast", "northwest", "southwest","southeast")
+
+```
+
+
+```{r}
+#data visualization
+summary(med)
+plot(med$charges)
+plot(log(med$charges))
+```
+
+```{r}
+par(mfrow = c(2,4))
+#4 numerical data
+hist(med$charges,xlab = "Insurance Cost (Y) ", main="Medical Insurance Cost Data")
+hist(med$age,xlab = "Age", main="Medical Insurance Cost Data")
+hist(med$bmi,xlab = "BMI", main="Medical Insurance Cost Data")
+hist(med$children,xlab = "Number of children", main="Medical Insurance Cost Data")
+#3 categorical data
+barplot(table(med$sex),xlab="Sex",
+main = "Medical Insurance Cost Data")
+barplot(table(med$smoker),xlab="Smoker",
+main = "Medical Insurance Cost Data")
+barplot(table(med$region),xlab="Region",
+main = "Medical Insurance Cost Data")
+
+```
+
+```{r}
+par(mfrow = c(2,2))
+qqnorm(med$charges)
+qqnorm(log(med$charges))
+qqnorm(med$age)
+qqnorm(med$bmi)
+#Charts :1.charges, 2.ln(charge) 3.age 4.bmi
+
+```
+```{r}
+#Change charges into ln()
+med$charges<-log(med$charges)
+```
+
+```{r}
+#Validation Set
+set.seed(1)
+train=sample(c(TRUE,FALSE), nrow(med),rep=TRUE)
+#sum(train==TRUE);sum(train==FALSE)
+test=(!train)
+```
+
+```{r}
+#full regression model 
+y=med$charges
+res=lm(y~age+sex+bmi+children+smoker+region,data=med)
+summary(res)
+```
+
+We are going to select models, we use MSE and other values to compare models
+and following part have three methods to measure MSE:
+#1.using all data 2.validation set 3.Cross Validation
+
+
+```{r}
+reg.best=regsubsets(charges~ . ,data=med,nvmax=8)
+summary(reg.best)
+```
+
+
+
+```{r}
+#using whole data to train
+reg.Med.summary=summary(reg.best)
+reg.Med.summary$outmat
+r2=reg.Med.summary$rsq
+adjr2=reg.Med.summary$adjr2  
+cp=reg.Med.summary$cp
+bic=reg.Med.summary$bic
+table_best=data.frame(model=c(1:8),r2,adjr2,cp,bic)
+table_best
+#looking for coef
+coef(reg.best,3)
+coef(reg.best,4)
+```
+prefer 3 or 4 model
+
+
+
+
+```{r}
+#Validation Set
+regfit.full=regsubsets(charges~.,data=med[train,],nvmax=8)
+#summary(regfit.full)
+test.mat=model.matrix(charges~.,data=med[test,])
+val.errors=rep(NA,8)
+for (i in 1:8)
+{
+  coefi=coef(regfit.full,id=i)
+  pred=test.mat[,names(coefi)]%*%coefi
+  val.errors[i]=mean((med$charges[test]-pred)^2)
+  
+}
+data.frame(model=c(1:8),val.errors)
+plot(val.errors)
+#minimum errors' model
+#coef(regfit.full, which(val.errors==min(val.errors)))
+```
+
+validation test show...
+
+```{r}
+#prediction
+predict.regsubsets=function(object,newdata,id,...)
+{
+form=as.formula(object$call[[2]])
+mat=model.matrix(form,newdata)
+coefi=coef(object,id=id)
+xvars=names(coefi)
+mat[,xvars]%*%coefi
+}
+#Cross validation
+k=10
+set.seed(1)
+folds=sample(1:k,nrow(med),replace=TRUE)
+#folds
+cv.errors=matrix(NA,k,8, dimnames=list(NULL, paste(1:8)))
+for(j in 1:k){
+  best.fit=regsubsets(charges~.,data=med[folds!=j,],nvmax=8)
+  for(i in 1:8){
+    pred=predict.regsubsets(best.fit,med[folds==j,],id=i)
+    cv.errors[j,i]=mean( (med$charges[folds==j]-pred)^2)
+    }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+#draw plot
+data.frame(model=c(1:8),mean.cv.errors)
+plot(mean.cv.errors)
+
+#minimum errors' model#coef(regfit.full, which(mean.cv.errors==min(mean.cv.errors)))
+```
+
+CV shows ....
+
+CONCLUSION could be:
+Although we have model 6 with lowest MSE, we prefer 3  factor model is the best, because it is not complicated and the accuracy is ratively high.
+
+
+```{r}
+#3 factor model is the best, because it is not complicated and the accuracy is ratively high.
+res2=lm(y~age+children+smoker,data=med)
+summary(res2)
+
+```
+
+
+
+Also, we can try to do Ridge and Lasso to reduce Variance
+
+```{r}
+#Ridge & Lasso
+# make design matrix x and response y=charges
+x=model.matrix(charges~.,med)[,-1]
+y=med$charges
+fit.ridge = glmnet(x,y,alpha=0)
+plot(fit.ridge, xvar="lambda", label=TRUE)
+cv.ridge = cv.glmnet(x,y,alpha =0);plot(cv.ridge)
+
+fit.lasso = glmnet(x,y,alpha=1)
+plot(fit.lasso, xvar="lambda", label=TRUE)
+cv.lasso = cv.glmnet(x,y,alpha =1);plot(cv.lasso)
+```
+
+We can see which proportion of training set have best performance
+Both Ridge and Lasso. Table1:Ridge;Table2:Lasso
+
+```{r}
+#decide training set 
+set.seed(1)
+tp=rep(0,9)
+mse=rep(0,9)
+a=c(0.5,0.5625,0.625,0.6875,0.75,0.8125,0.875,0.9375,1)
+for (i in 1:9) {
+    if (i<1) {
+    train=sample(1:nrow(x), a[i]*nrow(x))
+    test=(-train)
+    y.test = y[-train]
+    alpha0.fit =cv.glmnet(x[train,],y[train], alpha=0, type.measure="mse",family="gaussian")
+    alpha0.predicted = predict(alpha0.fit, s=alpha0.fit$lambda.1se,newx=x[-train,])
+    tp[i]=alpha0.fit$lambda.1se
+    mse[i]=mean((y.test-alpha0.predicted)^2)
+    } 
+    else {
+    train=sample(1:nrow(x), a[i]*nrow(x))
+    test=(train)
+    y.test = y[train]
+    alpha0.fit =cv.glmnet(x[train,],y[train], alpha=0, type.measure="mse",family="gaussian")
+    alpha0.predicted = predict(alpha0.fit, s=alpha0.fit$lambda.1se,newx=x[train,])
+    tp[i]=alpha0.fit$lambda.1se
+    mse[i]=mean((y.test-alpha0.predicted)^2)
+    }
+  
+}
+
+table_Ridge=data.frame(RatioOfTrainingSet = a, tp=tp,MSE=mse)
+table_Ridge
+
+#Lasso
+for (i in 1:9) {
+    if (i<1) {
+    train=sample(1:nrow(x), a[i]*nrow(x))
+    test=(-train)
+    y.test = y[-train]
+    alpha1.fit =cv.glmnet(x[train,],y[train], alpha=1, type.measure="mse",family="gaussian")
+    alpha1.predicted = predict(alpha1.fit, s=alpha1.fit$lambda.1se,newx=x[-train,])
+    tp[i]=alpha1.fit$lambda.1se
+    mse[i]=mean((y.test-alpha1.predicted)^2)
+    } 
+    else {
+    train=sample(1:nrow(x), a[i]*nrow(x))
+    test=(train)
+    y.test = y[train]
+    alpha1.fit =cv.glmnet(x[train,],y[train], alpha=1, type.measure="mse",family="gaussian")
+    alpha1.predicted = predict(alpha1.fit, s=alpha1.fit$lambda.1se,newx=x[train,])
+    tp[i]=alpha1.fit$lambda.1se
+    mse[i]=mean((y.test-alpha1.predicted)^2)
+    }
+  
+}
+
+table_Lasso=data.frame(RatioOfTrainingSet = a, tp=tp,MSE=mse)
+table_Lasso
+```
+
+conclude that ratio between 0.625-0.75 is better ratio
+Using Elastic_Net Regression and using 0.6875 times of data as training data
+
+```{r}
+#Elastic_Net Regression
+set.seed(1)
+train=sample(1:nrow(x), 0.6875*nrow(x))
+test=(-train)
+y.test = y[-train]
+
+list.of.fits = list()
+for (i in 0:10) {
+  fit.name = paste0("alpha",i/10)
+  list.of.fits[[fit.name]] = cv.glmnet(x[train,], y[train],alpha=i/10,type.measure="mse", family="gaussian")
+}
+results= data.frame()
+
+for (i in 0:10) {
+  fit.name = paste0("alpha",i/10)
+  predicted =
+predict(list.of.fits[[fit.name]],s=list.of.fits[[fit.name]]$lambda.1se,newx=x[-train,])
+  
+  mse = mean((y.test - predicted)^2)
+  temp = data.frame(alpha = i/10, mse=mse, fit.name = fit.name)
+  results = rbind(results,temp)
+}
+results
+results[match(min(results$mse),results$mse),]
+plot(results$alpha,results$mse)
+
+```
+
+
+```{r}
+alpha1=results[match(min(results$mse),results$mse),][1,1]
+alpha1
+list.of.fits = list()
+for (i in 0:10) {
+  fit.name = paste0("alpha",i/100 +alpha1)
+  list.of.fits[[fit.name]] = cv.glmnet(x[train,], y[train],alpha=i/100 +alpha1,type.measure="mse", family="gaussian")
+}
+results= data.frame()
+
+for (i in 0:10) {
+  fit.name = paste0("alpha",i/100 +alpha1)
+  predicted =
+predict(list.of.fits[[fit.name]],s=list.of.fits[[fit.name]]$lambda.1se,newx=x[-train,])
+  
+  mse = mean((y.test - predicted)^2)
+  temp = data.frame(alpha = i/100+alpha1, mse=mse, fit.name = fit.name)
+  results = rbind(results,temp)
+}
+results[match(min(results$mse),results$mse),][1,1]
+results
+
+```
+
+get the result that alpha=0.12 in EN regression has lowest MSE 
+
+
+```{r}
+x=model.matrix(charges~.,med)[,-1]
+y=med$charges
+fit.model = glmnet(x,y,alpha=0.12)
+plot(fit.model, xvar="lambda", label=TRUE)
+cv.model = cv.glmnet(x,y,alpha =0.12);plot(cv.model)
+```
+```{r}
+#Decision Tree- whole tree
+tree.M=tree(charges~. ,data=med,control= tree.control(nrow(med), mincut = 0,minsize = 2,mindev = 0))
+plot(tree.M)
+text(tree.M)
+```
+
+```{r}
+#using training set to build tree
+tree.M=tree(charges~. ,data=med[train,],control= tree.control(nrow(med[train,]), mincut = 1,minsize = 2,mindev = 0))
+plot(tree.M)
+text(tree.M)
+#MSE
+mean((med[test,"charges"]-predict(tree.M,med[test,]))^2)
+```
+
+```{r}
+#Cross validation:Find the best pruned tree n=13
+k=10
+
+folds=sample(1:k,nrow(med),replace=TRUE)
+#folds
+cv.errors=matrix(NA,k,29, dimnames=list(NULL, paste(1:29)))
+for(j in 1:k){
+  set.seed(1)
+  tree.M2=tree(charges~. ,data=med[folds!=j,],control= tree.control(nrow(med[folds!=j,]), mincut = 1,minsize = 2,mindev = 0))
+  for(i in 1:29){
+    set.seed(1)
+    prune.M2=prune.tree(tree.M2,best=i+1)
+    pred=predict(prune.M2,med[folds==j,])
+    cv.errors[j,i]=mean((med[folds==j,"charges"]-pred)^2)
+    }
+}
+mean.cv.errors=apply(cv.errors,2,mean)
+#draw plot
+table2biii=data.frame(node=c(2:30),mean.cv.errors)
+plot(table2biii$node,table2biii$mean.cv.errors)
+plot(table2biii$node[1:15],table2biii$mean.cv.errors[1:15])
+n=which(table2biii$mean.cv.errors==min(table2biii$mean.cv.errors))+1
+n
+prune.M3=prune.tree(tree.M,best=n)
+mean((med[test,"charges"]-predict(prune.M3,med[test,]))^2)
+
+```
+```{r}
+branchs=c(1:20)
+MSE.tr=c(rep(NA,20))
+
+for(j in 2:20){
+  prune.test=prune.tree(tree.M,best=j)
+  MSE.tr[j]=mean((med[test,"charges"]-predict(prune.test,med[test,]))^2)
+}
+MSE.tr[1]=mean((med[test,"charges"]-mean(med[train,"charges"]))^2)
+
+
+
+table.tr=data.frame(branchs,MSE.tr)
+table.tr
+```
+
+```{r}
+for(j in 2:12){
+  prune.test=prune.tree(tree.M,best=j)
+  plot(prune.test)
+  text(prune.test)
+}
+```
+```{r}
+#test MSE
+MSE.lm=val.errors
+table.lm=data.frame(model=c(1:8),MSE.lm)
+table.compare=data.frame(table.lm,table.tr[5:12,])
+table.compare
+```
+
+
+```{r}
+p_number=c(1:6)
+treeN=c(1:10)*500
+error.mat=matrix(NA,length(treeN),length(p_number))
+er.df=data.frame(error.mat)
+colnames(er.df) = paste0("Parameter#:",c(1:6))
+for(i in c(1:6)){
+  
+  for(j in c(1:10)){
+    set.seed(1)
+    rf.med=randomForest(formula = charges ~ ., data = med[train,] , ntree = j*500,mtry=i,proximity = TRUE)
+    yhat.rf.med=predict(rf.med, newdata = med[test,],n.trees =j*500,mtry=i,proximity = TRUE)
+    er.df[j,i]=mean((yhat.rf.med$predicted-med[test,"charges"])^2)
+  }
+  print(i)
+}
+```
+
+```{r}
+
+er.df2=data.frame(treeN,er.df[,2:6])
+data_long <- melt(er.df2, id = "treeN")
+colnames(data_long)[3]="testMSE"
+randomforest_plot <- ggplot(data_long,            
+               aes(x = treeN,
+                   y = testMSE,
+                   color = variable)) +  geom_line()
+
+randomforest_plot
+#using 3 parameter's rf has lowest MSE
+table.rf=er.df2[,c(1,3)]
+colnames(table.rf)[2]="MSE.rf_p3"
+table.compare2=data.frame(table.compare,table.rf[3:10,])
+```
+
+```{r}
+d=c(1:10)
+lamda=c(1:30)/100
+error.mat.boost=matrix(NA,length(lamda),length(d))
+er.boost=data.frame(error.mat.boost)
+colnames(er.boost) = paste0("Depth",c(1:10))
+for(i in c(1:10)){
+  print(i)
+  for(j in c(1:30)){
+    set.seed(1)
+    boost.med=gbm(charges~.,data=med[train,],distribution = "gaussian",n.trees = 5000,interaction.depth = i,shrinkage = lamda[j])
+    yhat.boost=predict(boost.med,newdata = med[test,],n.trees = 5000,interaction.depth = i,shrinkage = lamda[j])
+    er.boost[j,i]=mean((yhat.boost-med[test,"charges"])^2)
+  }
+}
+```
+
+```{r}
+er.boost2=data.frame(lamda,er.boost)
+#colnames(er.df2)[1]="lamda"
+
+  
+boost_long <- melt(er.boost2, id = "lamda")
+colnames(boost_long)[3]="testMSE"
+gfg_plot <- ggplot(boost_long,            
+               aes(x = lamda,
+                   y = testMSE,
+                   color = variable)) +  geom_line()
+
+gfg_plot
+```
+
+```{r}
+#lamda for 0.0002 ~0.01
+d.2=c(1:10)
+lamda.2=c(1:50)/5000
+error.mat.boost.2=matrix(NA,length(lamda.2),length(d.2))
+er.boost.2=data.frame(error.mat.boost.2)
+colnames(er.boost.2) = paste0("Depth",c(1:10))
+for(i in c(1:10)){
+  print(i)
+  for(j in c(1:50)){
+    set.seed(1)
+    boost.med.2=gbm(charges~.,data=med[train,],distribution = "gaussian",n.trees = 5000,interaction.depth = i,shrinkage = lamda.2[j])
+    yhat.boost.2=predict(boost.med.2,newdata = med[test,],n.trees = 5000,interaction.depth = i,shrinkage = lamda.2[j])
+    er.boost.2[j,i]=mean((yhat.boost.2-med[test,"charges"])^2)
+  }
+}
+```
+
+```{r}
+er.boost2.2=data.frame(lamda.2,er.boost.2)
+#colnames(er.df2)[1]="lamda"
+
+  
+boost_long.2 <- melt(er.boost2.2, id = "lamda.2")
+colnames(boost_long.2)[3]="testMSE"
+colnames(boost_long.2)[1]="lamda"
+gfg_plot.2 <- ggplot(boost_long.2,            
+               aes(x = lamda,
+                   y = testMSE,
+                   color = variable)) +  geom_line()
+
+gfg_plot.2
+
+er.boost2.2[which(er.boost2.2==min(er.boost2.2[,2:11]))%%50,1]
+colnames(er.boost2.2)[which(er.boost2.2==min(er.boost2.2[,2:11]))%/%50+1]
+Depth=colnames(er.boost2.2)[2:11]
+MSE.bo_l0.0012=t(er.boost2.2[6,2:11])[1:10]
+table.bo=data.frame(Depth,MSE.bo_l0.0012)
+table.compare3=data.frame(table.compare2,table.bo[3:10,])
+```
+
+```{r}
+table.compare3
+```
+
+
+
